@@ -28,7 +28,6 @@
 .const DIRECT_MODE         = $00    // constant: direct mode selector
 .const RUN_MODE            = $FF    // constant: run mode selector
 
-* = $0104
 /*
  * ===========================================
  * Initializes the symbol dictionary with 4 entries.

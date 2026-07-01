@@ -144,26 +144,6 @@ wait_raster:
 
 /*
  * ===========================================
- * Convert C64 color to Plus/4 color
- *
- * Input:  A = C64 color value (0-15)
- * Output: A = Plus/4 color value
- * ===========================================
- */
-convert_c64_color:
-       tax
-       lda c64_to_plus4_colors,x
-       rts
-
-/*
- * ===========================================
- * Constants for screen operations
- * ===========================================
- */
-.const SPACE_CHAR = $20
-
-/*
- * ===========================================
  * Display a test pattern on screen
  * (For debugging initialization)
  * ===========================================

@@ -280,14 +280,15 @@ The Plus/4 uses the TED 7360 (Text Editing Device) instead of the VIC-II:
 ```
 plus4/
 ├── CONVERSION_NOTES.md          # Detailed conversion documentation
-├── DATA_PREP_GUIDE.md           # Guide for extracting/preparing room data files
+├── DATA_PREP_GUIDE.md           # (legacy) file-based data prep notes
 ├── README.md                    # Quick start guide
 ├── plus4_constants.inc          # TED registers, color maps, memory layout
 ├── plus4_decompressor.asm       # Compression decoder (direct port)
 ├── plus4_init.asm               # System initialization
-├── plus4_loader.asm             # Standard IEC disk loader (NEW)
+├── plus4_sector_io.asm          # Raw DOS U1 sector reader (NEW)
+├── plus4_loader.asm             # Sector-based room loader (reads original disk)
 ├── plus4_room_render.asm        # Simplified room renderer
-└── plus4_main.asm               # Main program and test harness (NEW)
+└── plus4_main.asm               # Main program and test harness
 ```
 
 ### Completed Components
@@ -332,22 +333,32 @@ Simplified single-buffer renderer:
 - No raster IRQ chain
 - Static display only
 
-#### 5. Disk Loader (`plus4_loader.asm`)
-Standard IEC disk loader using KERNAL calls (replaces C64's 10-stage fast loader):
-- **KERNAL-based I/O**: Uses `SETLFS`, `SETNAM`, `OPEN`, `LOAD`, `CLOSE`, `CHKIN`, `CHRIN`
-- **Simple file loading**: `load_file` - Load complete file to memory
-- **Streaming mode**: `load_file_streaming` - Byte-by-byte reading for processing
-- **Room loader**: `load_room` - Loads rooms by number using "ROOMnn" naming convention
-- **Filename builder**: Converts room index (0-54) to "ROOM00"-"ROOM54" format
-- **Error handling**: `read_disk_status` reads drive error messages
-- **Standard device**: Device 8 (1541/1551 compatible)
+#### 5. Disk Loader (`plus4_sector_io.asm` + `plus4_loader.asm`)
+**Option A — read the original game disk as-is** (no data conversion, no per-room
+files). Uses raw DOS `U1` block reads plus the C64 resource location tables.
+
+`plus4_sector_io.asm` (low-level raw sector I/O):
+- **Direct-access channel**: `OPEN 2,8,2,"#"` for a drive buffer, command channel `#15`
+- **`sector_read`** (X=track, Y=sector): issues `U1 ch drv track sector` and reads 256
+  bytes into `SEC_BUFFER` ($0700)
+- **`sector_build_u1` / `sector_emit_dec`**: build the ASCII `U1` command string
+- **`sector_stream_init` / `sector_stream_next`**: byte stream across sectors, auto-
+  advancing per 1541 zone geometry and skipping each sector's 2-byte T/S link
+
+`plus4_loader.asm` (high-level room loading):
+- **`init_disk`**: opens the sector channels and loads the location tables
+- **`load_location_tables`**: streams the C64 resource tables from Track 1 / Sector 1
+  (offset $02) into `RSRC_TBL_BASE` ($6000)
+- **`load_room`**: looks up the room's disk side, sector and track from the tables,
+  then streams the room resource (4-byte header + payload) into memory
+- **`ensure_disk_side`**: tracks the active side (no physical side detection on this port)
+- **`read_disk_status`**: reads drive error messages over the already-open channel `#15`
 
 **Key differences from C64**:
-- No custom serial protocol - uses standard IEC
-- No drive-side code - all KERNAL-based
-- Slower but simpler and more compatible
-- No copy protection checks
-- Room-per-file structure vs streaming
+- No custom serial fast-loader protocol — uses standard KERNAL IEC + DOS `U1`
+- No drive-side 6502 code
+- No copy-protection checks
+- Reads the ORIGINAL disk layout directly (sequential packed resources)
 
 #### 6. Main Program (`plus4_main.asm`)
 Test harness and entry point:
@@ -393,10 +404,9 @@ $4000+      : Room data, game logic, resources
 6. Decompress color layer to $2400 (width × height bytes)
 7. Copy visible 40×17 portion to screen RAM starting at row 1
 
-#### Data File Structure
-**File naming**: Rooms stored as separate files: `ROOM00`, `ROOM01`, ... `ROOM54`
-
-**File format** (identical to C64 resource format):
+#### Room Resource Structure (on the original disk)
+Rooms are read directly from the original game disk \u2014 there is no per-room file and
+no data conversion step. The resource header is identical to the C64 format:
 ```
 Offset  Size  Description
 ------  ----  -----------
@@ -406,15 +416,17 @@ Offset  Size  Description
 +$04    ...   Room data (metadata + compressed layers)
 ```
 
-**Loading process**:
-1. Build filename from room number (e.g., 5 → "ROOM05")
-2. Use KERNAL `LOAD` to read file into memory at $4000
-3. Set `room_base` to $4004 (skip 4-byte header)
-4. Parse and render
+**Loading process (Option A, sector-based)**:
+1. Read the C64 resource location tables from Track 1 / Sector 1 (offset $02) into $6000
+2. Look up the room's disk side, sector and track from those tables
+3. Stream the resource with `sector_stream_*` (auto-advancing sectors, skipping the
+   2-byte T/S link) into memory at $4000
+4. Set `room_base` to $4004 (skip 4-byte header)
+5. Parse and render
 
-**Disk layout**: All 55 rooms (~150-250KB total) fit on single 1541 disk
+**Disk layout**: The original 1541 disk stores rooms as sequential packed resources.
 
-**Compatibility**: Same data format as C64 - no conversion needed, just extraction to individual files
+**Compatibility**: Reads the ORIGINAL disk unchanged \u2014 no extraction or repacking.
 
 ### Deferred Features
 
@@ -476,25 +488,23 @@ $FF1C : TED_RASTER_LO         # Current raster line (low)
 
 ### Testing Strategy
 
-#### Data Preparation
-1. **Extract room data from C64**:
-   - Use emulator memory dump or disk extraction
-   - Each room is a resource with 4-byte header + data
-   - See `DATA_PREP_GUIDE.md` for detailed instructions
+#### Building
+Assemble with KickAssembler:
+```
+cd plus4
+java -jar C:\Util\KickAssembler\KickAss.jar plus4_main.asm
+```
+Produces `plus4_main.prg` (contiguous $1001-$18dc). Benign "absolute mode for
+zeropage argument" warnings are expected (zeropage `.label`s defined after use).
 
-2. **Create disk image**:
-   - Name files ROOM00 through ROOM54 (two digits)
-   - Use c1541 or DirMaster to create D64
-   - All 55 rooms fit on single 1541 disk
-
-3. **Verify files**:
-   - Check filename format (exactly "ROOMnn")
-   - Verify byte 2 = $03 (room type)
-   - Verify byte 3 = room index
+#### Disk (no data preparation required)
+The port reads the ORIGINAL Maniac Mansion game disk directly via DOS `U1` block
+reads — there is no extraction/repacking step. Just attach the original disk image
+(side 1) to device 8.
 
 #### Running the Test Program
-1. Load `plus4_main.prg` on Plus/4
-2. Insert disk with room files
+1. Load `plus4_main.prg` on Plus/4 (or a VICE `xplus4` emulator)
+2. Attach the original game disk to device 8
 3. Run program
 4. Use keys:
    - **Space**: Reload room
@@ -512,7 +522,7 @@ $FF1C : TED_RASTER_LO         # Current raster line (low)
 
 ## Conversion Progress Tracking
 
-**Status**: ✓ Phase 1 code complete, awaiting testing
+**Status**: ✓ Phase 1 code complete and assembling cleanly, awaiting emulator/hardware testing
 
 ### Completed (Phase 1)
 - [x] Hardware analysis and documentation
@@ -522,15 +532,14 @@ $FF1C : TED_RASTER_LO         # Current raster line (low)
 - [x] Decompressor port
 - [x] Initialization code
 - [x] Basic room renderer structure
-- [x] Standard IEC disk loader
+- [x] Sector-based disk loader reading the original disk (Option A)
 - [x] Main program and test harness
-- [x] Data preparation documentation
+- [x] Clean KickAssembler build (`plus4_main.prg`)
 
 ### Pending (Phase 1)
-- [ ] Test with actual room data
+- [ ] Test with the original game disk in an emulator
 - [ ] Debug rendering issues
-- [ ] Verify color display
-- [ ] Create test harness program
+- [ ] Verify color display (apply color attributes to screen)
 
 ### Future Phases
 - [ ] Phase 2: Scrolling support
@@ -546,7 +555,8 @@ $FF1C : TED_RASTER_LO         # Current raster line (low)
 - **DATA_PREP_GUIDE.md** - How to extract room data from C64 and prepare disk files
 - **README.md** - Quick start guide for the Plus/4 port
 - **plus4_constants.inc** - All TED registers, memory locations, and constants
-- **plus4_loader.asm** - Standard IEC disk loading routines
+- **plus4_sector_io.asm** - Raw DOS U1 sector reader (reads the original disk)
+- **plus4_loader.asm** - Sector-based room loading routines (Option A)
 - **plus4_main.asm** - Test program with interactive room browser
 - TED chip datasheet (external reference recommended)
 

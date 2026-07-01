@@ -9,17 +9,49 @@ This directory contains the Commodore Plus/4 port of the Maniac Mansion room ren
 - **plus4_constants.inc** - TED chip registers, memory layout, color mappings
 - **plus4_decompressor.asm** - Compression decoder (ported from C64)
 - **plus4_init.asm** - Plus/4 initialization and setup routines
+- **plus4_sector_io.asm** - Raw DOS U1 sector reader (reads the original game disk)
+- **plus4_loader.asm** - Sector-based room loader (location tables + room streaming)
 - **plus4_room_render.asm** - Room rendering engine
+- **plus4_main.asm** - Test harness / interactive room browser (build entry point)
 
 ### Current Status
-**Phase 1: Basic Room Display** - Code complete, awaiting testing
+**Phase 1: Basic Room Display** - Assembles cleanly, awaiting hardware/emulator testing
 
 ✓ Hardware analysis
 ✓ Register definitions
 ✓ Decompressor ported
 ✓ Initialization code
 ✓ Room renderer structure
+✓ Sector-based loader (reads original disk, no data conversion)
+✓ Clean KickAssembler build (`plus4_main.prg`)
 ☐ Testing with actual data
+
+## Building
+
+Build with KickAssembler:
+```
+cd plus4
+java -jar C:\Util\KickAssembler\KickAss.jar plus4_main.asm
+```
+Produces `plus4_main.prg` (loads contiguously $1001-$18dc). The build emits benign
+"absolute mode for zeropage argument" warnings (cosmetic; caused by zeropage `.label`
+definitions placed after first use).
+
+## Disk Loading (Option A: read the original disk)
+
+The port reads the **original, unmodified** Maniac Mansion game disk using raw DOS
+`U1` block reads — no repacking into per-room files.
+
+1. `plus4_sector_io.asm` opens a direct-access buffer (`OPEN 2,8,2,"#"`) plus the
+   command channel (`#15`) and reads any (track, sector) via a `U1` command.
+2. `load_location_tables` streams the C64 resource location tables from Track 1 /
+   Sector 1 (offset $02) into `$6000`.
+3. `load_room` looks up the room's disk side, sector and track from those tables and
+   streams the room resource (4-byte header + payload) into memory, skipping each
+   sector's 2-byte track/sector link.
+
+Insert the original game disk (side 1) in device 8 and run — no data preparation step
+is required.
 
 ## Project Goals
 
@@ -112,12 +144,13 @@ Unchanged from C64 (hybrid RLE + 4-symbol dictionary):
 ## Testing
 
 To test the port:
-1. Obtain C64 room resource data
-2. Load into Plus/4 memory
-3. Set `room_base` pointer
-4. Call `init_plus4`
-5. Call `render_room`
-6. Verify display
+1. Build `plus4_main.prg` (see **Building** above)
+2. In a Plus/4 emulator (e.g. VICE `xplus4`), attach the original Maniac Mansion
+   game disk image to device 8
+3. `LOAD "plus4_main.prg",1` (or drag/drop) and `RUN`
+4. The program initializes the TED, opens the disk, loads the location tables,
+   then loads and renders room 0
+5. Navigate rooms with `\u2190`/`\u2192`, reload with `Space`, quit with `Q`
 
 ## Documentation
 

@@ -11,11 +11,18 @@
 .pc = $1001 "BASIC Upstart"
 :BasicUpstart(main)
 
-// Import all modules
+// Import constants early so their .const values resolve throughout.
+// The code modules are imported at the END of this file so that the
+// 'main' program block can sit at a fixed $1100 without the imported
+// module code (which flows from the current PC) overlapping it.
 #import "plus4_constants.inc"
-#import "plus4_init.asm"
-#import "plus4_loader.asm"
-#import "plus4_room_render.asm"
+
+// KERNAL routines
+.const GETIN = $FFE4          // Get character from keyboard
+
+// Program configuration
+.const DEFAULT_ROOM    = $00   // Start room (entry room)
+.const ROOM_DATA_BASE  = $4000 // Where to load room data
 
 /*
  * ===========================================
@@ -30,8 +37,10 @@ main:
        // Initialize Plus/4 hardware
        jsr init_plus4
 
-       // Initialize disk system
+       // Initialize disk system: opens sector channels and loads the room
+       // location tables from the game disk (side 1 must be inserted).
        jsr init_disk
+       bne main_error
 
        // Load room (start with room 0)
        lda #DEFAULT_ROOM
@@ -231,21 +240,11 @@ print_disk_error:
 
 /*
  * ===========================================
- * KERNAL routines
- * ===========================================
- */
-.const GETIN = $FFE4          // Get character from keyboard
-
-/*
- * ===========================================
  * Variables
  * ===========================================
  */
 .label print_ptr       = $64   // Pointer for string printing
 .label current_room    = $66   // Current room number
-
-.const DEFAULT_ROOM    = $00   // Start room (entry room)
-.const ROOM_DATA_BASE  = $4000 // Where to load room data
 
 /*
  * ===========================================
@@ -313,3 +312,11 @@ quit_msg:
  *    Byte 4+:  Room data (metadata + compressed layers)
  * ===========================================
  */
+
+// ---------------------------------------------------------------------------
+// Import code modules AFTER the main program so their code (which flows from
+// the current PC) is placed after 'main' and does not overlap the $1100 block.
+// ---------------------------------------------------------------------------
+#import "plus4_init.asm"
+#import "plus4_loader.asm"
+#import "plus4_room_render.asm"

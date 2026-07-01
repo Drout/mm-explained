@@ -208,6 +208,67 @@ c64_to_plus4_colors:
 .const ROOM_META_COLOR      = $0A      // Offset to color layer (16-bit)
 .const ROOM_META_MASK       = $0C      // Offset to mask layer (16-bit)
 
+// Room resource on-disk header (before room_base + 4)
+.const RSRC_HDR_SIZE_LO     = $00      // Resource header: total size low byte
+.const RSRC_HDR_SIZE_HI     = $01      // Resource header: total size high byte
+.const RSRC_HDR_TYPE        = $02      // Resource header: type / sentinel ($03 = room)
+.const RSRC_HDR_INDEX       = $03      // Resource header: room index
+.const RSRC_HDR_BYTES       = $04      // On-disk resource header size (bytes)
+
+// ============================================================================
+// Room Index Constants
+// ============================================================================
+
+.const ROOM_MAX_INDEX       = $36      // Highest valid room index (54); 55 rooms total (0..54)
+
+// ============================================================================
+// 1541 Disk Geometry / Resource Location Tables
+// ============================================================================
+// The C64 game keeps disk-location tables in memory (loaded from the game disk
+// at Track 1, Sector 1, offset $02). Each room resource begins at the start of
+// a sector, so a (side, track, sector) triple exactly locates a room.
+//
+// Table layout (as stored on disk, base offset $7401 in the C64 memory map):
+//   room_disk_side_tbl  ($7401) : 1 byte  per room  -> disk side ('1'/'2' style id)
+//   room_sec_trk_tbl    ($7438) : 2 bytes per room  -> [SECTOR, TRACK]
+//
+// We reproduce these tables locally on the Plus/4 by reading the same disk
+// bytes into RAM, then indexing them exactly like the original game does.
+
+.const RSRC_TBL_DISK_ADDR   = $7401    // Original C64 in-memory base of the tables
+.const RSRC_TBL_SIDE_OFS    = $0000    // room_disk_side_tbl - $7401
+.const RSRC_TBL_SECTRK_OFS  = $0037    // room_sec_trk_tbl   - $7401 ($7438 - $7401)
+.const RSRC_TBL_BYTES       = $03A2    // Bytes of location tables to read (matches C64 start_game)
+
+// The location tables live on the game disk at Track 1, Sector 1, starting at
+// byte offset $02 within that sector (the first 2 bytes are the sector link).
+.const RSRC_TBL_DISK_TRACK  = $01      // Track holding the resource location tables
+.const RSRC_TBL_DISK_SECTOR = $01      // Sector holding the resource location tables
+.const RSRC_TBL_DISK_OFFSET = $02      // Byte offset within that sector to start copying
+
+// Where we stage the room-location tables in Plus/4 RAM
+.const RSRC_TBL_BASE        = $6000    // Local copy of the C64 $7401 table block
+
+// 1541 sector-count zones (max 0-based sector index per track)
+.const TRK_ZONE1_MAXSEC     = $14      // Tracks  1-17 : 21 sectors (0..20)
+.const TRK_ZONE2_MAXSEC     = $12      // Tracks 18-24 : 19 sectors (0..18)
+.const TRK_ZONE3_MAXSEC     = $11      // Tracks 25-30 : 18 sectors (0..17)
+.const TRK_ZONE4_MAXSEC     = $10      // Tracks 31-35 : 17 sectors (0..16)
+
+.const DISK_SECTOR_SIZE     = 256      // Bytes per 1541 sector
+
+// ============================================================================
+// Character Constants
+// ============================================================================
+
+.const SPACE_CHAR           = $20      // Screen code / PETSCII space
+
+// ============================================================================
+// KERNAL Entry Points (shared)
+// ============================================================================
+
+.const CHROUT               = $FFD2    // Output character to current channel
+
 // ============================================================================
 // Keyboard Constants
 // ============================================================================
