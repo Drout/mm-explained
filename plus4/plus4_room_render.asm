@@ -44,7 +44,7 @@
  *
  * Process:
  * 1. Read room metadata (width, height, colors, layer offsets)
- * 2. Decompress tile definitions to character RAM ($1000)
+ * 2. Decompress tile definitions to character RAM (ROOM_CHARSET_BASE)
  * 3. Decompress tile matrix to temporary buffer
  * 4. Decompress color layer to temporary buffer
  * 5. Copy visible portion to screen RAM with colors applied
@@ -56,6 +56,14 @@ render_room:
 
        // Decompress tile definitions to character RAM
        jsr decompress_tile_definitions
+
+       // Now that a valid tile font exists at ROOM_CHARSET_BASE, point the TED character
+       // generator at it. $FF13 encodes the base as (address / 1024) << 2,
+       // so $3000 -> $30 (see TED_CHARBASE_TILES). Doing this only after the
+       // font is present avoids drawing characters from empty RAM and avoids
+       // overwriting the program, which occupies $1001-$19xx.
+       lda #TED_CHARBASE_TILES
+       sta TED_CHAR_BASE
 
        // Decompress tile matrix
        jsr decompress_tile_matrix
@@ -119,7 +127,7 @@ read_room_metadata:
  * Decompress tile definitions to character RAM
  *
  * Reads compressed tile data from room resource and
- * decompresses to $1000 (character RAM)
+ * decompresses to ROOM_CHARSET_BASE (character RAM)
  * ===========================================
  */
 decompress_tile_definitions:
@@ -261,7 +269,11 @@ decompress_color_layer:
  * ===========================================
  */
 copy_room_to_screen:
-       // Source pointers
+       // Room layers are decompressed in column-major order: each column
+       // contains 17 consecutive bytes (top-to-bottom rows).
+       // Blit the first 40 columns into the visible 40x17 viewport.
+
+       // Source pointers start at column 0 for tile/color buffers.
        lda #<ROOM_TILE_MATRIX
        sta src_tile
        lda #>ROOM_TILE_MATRIX
@@ -272,62 +284,94 @@ copy_room_to_screen:
        lda #>ROOM_COLOR_BUFFER
        sta src_color + 1
 
-       // Destination: screen RAM starting at row 1 (after message bar)
+       ldx #$00                     // X = visible column 0..39
+copy_col_loop:
+       // Destination points to row 1, current column X.
        lda #<(PLUS4_SCREEN_RAM + SCREEN_COLS)
        sta dest_screen
        lda #>(PLUS4_SCREEN_RAM + SCREEN_COLS)
        sta dest_screen + 1
 
-       // Copy 17 rows
-       ldx #$00                     // Row counter
+       lda #<(PLUS4_COLOR_RAM + SCREEN_COLS)
+       sta dest_color
+       lda #>(PLUS4_COLOR_RAM + SCREEN_COLS)
+       sta dest_color + 1
 
-copy_row_loop:
-       // Copy 40 characters in this row
+       txa
+       clc
+       adc dest_screen
+       sta dest_screen
+       bcc copy_col_dest_ok
+       inc dest_screen + 1
+copy_col_dest_ok:
+
+       txa
+       clc
+       adc dest_color
+       sta dest_color
+       bcc copy_col_color_dest_ok
+       inc dest_color + 1
+copy_col_color_dest_ok:
+
+       // Copy one full column: 17 rows, source contiguous, destination +40.
        ldy #$00
-
-copy_char_loop:
-       // Get tile number
+copy_col_rows:
        lda (src_tile),y
+       sty temp_y
+       ldy #$00
        sta (dest_screen),y
+       ldy temp_y
 
-       // TODO: Apply color attribute
-       // Plus/4 color handling is more complex
-       // For now, just copy the tile
+       lda (src_color),y
+       jsr convert_c64_color
+       sty temp_y
+       ldy #$00
+       sta (dest_color),y
+       ldy temp_y
 
-       iny
-       cpy #ROOM_VIEWPORT_COLS
-       bne copy_char_loop
-
-       // Advance to next row
-       // Advance source pointers by room_width
-       clc
-       lda src_tile
-       adc room_width
-       sta src_tile
-       lda src_tile + 1
-       adc #$00
-       sta src_tile + 1
-
-       clc
-       lda src_color
-       adc room_width
-       sta src_color
-       lda src_color + 1
-       adc #$00
-       sta src_color + 1
-
-       // Advance destination by SCREEN_COLS (40)
+       // Advance destination by one screen row (40 chars).
        clc
        lda dest_screen
        adc #SCREEN_COLS
        sta dest_screen
-       lda dest_screen + 1
-       adc #$00
-       sta dest_screen + 1
+       bcc copy_col_no_carry
+       inc dest_screen + 1
+copy_col_no_carry:
+
+       clc
+       lda dest_color
+       adc #SCREEN_COLS
+       sta dest_color
+       bcc copy_col_color_no_carry
+       inc dest_color + 1
+copy_col_color_no_carry:
+
+       iny
+       cpy #ROOM_VIEWPORT_ROWS
+       bne copy_col_rows
+
+       // Advance source pointers to next room column (+17 bytes).
+       clc
+       lda src_tile
+       adc #ROOM_VIEWPORT_ROWS
+       sta src_tile
+       bcc copy_col_tile_ok
+       inc src_tile + 1
+copy_col_tile_ok:
+
+       clc
+       lda src_color
+       adc #ROOM_VIEWPORT_ROWS
+       sta src_color
+       bcc copy_col_color_ok
+       inc src_color + 1
+copy_col_color_ok:
 
        inx
-       cpx #ROOM_VIEWPORT_ROWS
-       bne copy_row_loop
+       cpx #ROOM_VIEWPORT_COLS
+       beq copy_cols_done
+       jmp copy_col_loop
+copy_cols_done:
 
        rts
 
@@ -430,4 +474,5 @@ convert_c64_color:
 .label src_tile            = $54    // Source tile matrix pointer
 .label src_color           = $56    // Source color buffer pointer
 .label dest_screen         = $58    // Destination screen pointer
+.label dest_color          = $50    // Destination color RAM pointer
 .label temp_y              = $5A    // Temporary Y storage

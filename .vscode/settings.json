@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cd plus4; java -jar C:\\\\Util\\\\KickAssembler\\\\KickAss\\.jar plus4_main\\.asm$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

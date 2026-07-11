@@ -19,6 +19,7 @@
 
 // KERNAL routines
 .const GETIN = $FFE4          // Get character from keyboard
+.const SCNKEY = $FF9F         // Scan keyboard matrix now (don't rely only on IRQ)
 
 // Program configuration
 .const DEFAULT_ROOM    = $00   // Start room (entry room)
@@ -31,9 +32,6 @@
  */
 .pc = $1100 "Main Program"
 main:
-       // Print startup message
-       jsr print_startup_message
-
        // Initialize Plus/4 hardware
        jsr init_plus4
 
@@ -54,6 +52,7 @@ main:
 
        // Main loop (wait for input)
 main_loop:
+       jsr SCNKEY            // Refresh keyboard state explicitly
        jsr GETIN             // Check for keypress
        beq main_loop         // No key, keep waiting
 
@@ -67,7 +66,19 @@ main_loop:
        cmp #KEY_RIGHT        // Right arrow = next room
        beq next_room
 
+       cmp #'A'              // A = previous room (emulator-friendly fallback)
+       beq prev_room
+
+       cmp #'D'              // D = next room (emulator-friendly fallback)
+       beq next_room
+
+       cmp #'R'              // R = reload current room
+       beq reload_room
+
        cmp #'Q'              // Q = quit
+       beq quit_program
+
+       cmp #'q'              // Lowercase q = quit
        beq quit_program
 
        jmp main_loop
@@ -159,6 +170,7 @@ main_error:
 
        // Wait for key
 wait_error:
+       jsr SCNKEY
        jsr GETIN
        beq wait_error
 

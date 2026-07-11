@@ -154,6 +154,13 @@ sector_read:
        stx sec_rd_track
        sty sec_rd_sector
 
+       // Visual probe: flash border during each physical sector read so disk
+       // activity is obvious in emulators and on real hardware.
+       lda TED_BORDER_COLOR
+       sta sec_saved_border
+       lda #P4_RED
+       sta TED_BORDER_COLOR
+
        // Build the U1 command string in sec_cmd_buf.
        jsr sector_build_u1
        bcs sector_read_fail         // build failed (shouldn't happen)
@@ -190,12 +197,16 @@ sector_data_read:
        bne sector_data_read         // loop until 256 bytes read (Y wraps to 0)
 
        jsr K_CLRCHN
+       lda sec_saved_border
+       sta TED_BORDER_COLOR
        clc
        rts
 
 sector_read_status_bad:
        jsr K_CLRCHN
 sector_read_fail:
+       lda sec_saved_border
+       sta TED_BORDER_COLOR
        sec
        rts
 
@@ -469,6 +480,8 @@ sec_dec_val:
 sec_dec_emitted:
        .byte $00
 sec_stream_byte:
+       .byte $00
+sec_saved_border:
        .byte $00
 
 sec_cmd_buf:

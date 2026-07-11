@@ -67,14 +67,14 @@ Convert Maniac Mansion from C64 to Plus/4, focusing on room rendering:
 - **Video**: VIC-II → TED 7360
 - **Colors**: 16 → 121 (mapped)
 - **Screen RAM**: $C800/$CC00 → $0C00
-- **Character RAM**: $D800 → $1000
+- **Character RAM**: $D800 → $3000 (room tile charset)
 - **Sprites**: Hardware → None (excluded)
 - **Buffers**: Double → Single
 
 ### Memory Layout
 ```
 $0C00 : Screen RAM (40×25)
-$1000 : Character definitions (tiles)
+$3000 : Character definitions (room tiles, 2KB)
 $2000 : Tile matrix buffer
 $2400 : Color layer buffer
 $2800 : Mask layer buffer

@@ -381,6 +381,16 @@ load_room_h3:
 load_room_h4:
        sta room_hdr_index
 
+       // Validate header before accepting payload as a room resource.
+       // This catches wrong-track/sector reads and random garbage quickly.
+       lda room_hdr_type
+       cmp #RSRC_TYPE_ROOM
+       bne load_room_err
+
+       lda room_hdr_index
+       cmp room_number
+       bne load_room_err
+
        // --- Set up destination and write the 4 header bytes we consumed. ---
        lda load_dest
        sta room_dest

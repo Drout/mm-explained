@@ -40,6 +40,9 @@ All TED registers are located at $FF00-$FF3F.
 .const TED_CHAR_BASE        = $FF13    // Character generator base address
 .const TED_SCREEN_BASE      = $FF14    // Screen memory base address / video address
 
+// For $0C00 (screen RAM) the encoding is ($0C00 / 1024) << 3 = $18.
+.const TED_SCREENBASE_0C00  = $18      // $FF14 value selecting screen at $0C00
+
 // Video timing
 .const TED_RASTER_LO        = $FF1C    // Current raster line (bits 7-0)
 .const TED_RASTER_HI        = $FF1D    // Current raster line (bit 8) and vertical position
@@ -84,19 +87,28 @@ All TED registers are located at $FF00-$FF3F.
 // Memory Layout Constants
 // ============================================================================
 
-// Standard memory locations
-.const PLUS4_SCREEN_RAM     = $0C00    // Default screen RAM (1000 bytes)
-.const PLUS4_COLOR_RAM      = $0800    // Color RAM (1000 bytes) - not hardware!
+// Standard text-mode memory locations
+// On the Plus/4, screen codes live at $0C00 and the per-cell color matrix is a
+// separate 1 KB RAM area at $0800.
+.const PLUS4_SCREEN_RAM     = $0C00    // Default screen RAM / video matrix (1000 bytes)
+.const PLUS4_COLOR_RAM      = $0800    // Default text-mode color RAM / color matrix (1000 bytes)
 .const PLUS4_CHARSET_ROM    = $D000    // Character ROM location (when mapped)
 .const PLUS4_BASIC_ROM      = $8000    // BASIC ROM
 .const PLUS4_KERNAL_ROM     = $FC00    // KERNAL ROM
 
 // Room rendering memory layout
 .const ROOM_SCREEN_BASE     = $0C00    // Screen memory for room display
-.const ROOM_CHARSET_BASE    = $1000    // Character set for tiles (4KB)
+// The assembled program occupies $1001-$19xx, so the tile charset cannot live
+// at $1000 without overwriting the program. Use safe RAM above the transient
+// layer buffers instead.
+.const ROOM_CHARSET_BASE    = $3000    // Character set for room tiles (2KB used)
 .const ROOM_TILE_MATRIX     = $2000    // Decompressed tile matrix
 .const ROOM_COLOR_BUFFER    = $2400    // Decompressed color layer
 .const ROOM_MASK_BUFFER     = $2800    // Decompressed mask layer
+
+// $FF13 holds the character base in bits 7-2 (address / 1024, shifted into
+// bits 7-2). For the room tile font at $3000: ($3000 / 1024) << 2 = 12 << 2 = $30.
+.const TED_CHARBASE_TILES   = $30      // $FF13 value selecting a font at $3000
 
 // ============================================================================
 // Screen Layout Constants
