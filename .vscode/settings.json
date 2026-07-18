@@ -3,6 +3,10 @@
         "/^cd plus4; java -jar C:\\\\Util\\\\KickAssembler\\\\KickAss\\.jar plus4_main\\.asm$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^python3 \\.\\\\plus4\\\\extract_room_png\\.py --disk-dir c:\\\\dev\\\\mm --room 1 --charset-only$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }
