@@ -30,6 +30,8 @@
 .label room_bg1            = $44
 .label room_bg2            = $45
 
+.const ROOM_META_BASE      = RSRC_HDR_BYTES
+
 // Tile matrix/color/mask decompressed buffers
 // Using addresses from plus4_constants.inc:
 // ROOM_TILE_MATRIX  = $2000
@@ -40,7 +42,7 @@
  * ===========================================
  * Load and display a room
  *
- * Input: room_base = pointer to room resource (after 4-byte header)
+ * Input: room_base = pointer to room resource (at 4-byte header)
  *
  * Process:
  * 1. Read room metadata (width, height, colors, layer offsets)
@@ -91,34 +93,42 @@ render_room:
  */
 read_room_metadata:
        // Read width
-       ldy #ROOM_META_WIDTH
+       ldy #ROOM_META_BASE + ROOM_META_WIDTH
        lda (room_base),y
        sta room_width
 
        // Read height (should always be 17)
-       ldy #ROOM_META_HEIGHT
+       ldy #ROOM_META_BASE + ROOM_META_HEIGHT
        lda (room_base),y
        sta room_height
 
        // Read background colors
-       ldy #ROOM_META_BG0
+       ldy #ROOM_META_BASE + ROOM_META_BG0
        lda (room_base),y
        jsr convert_c64_color
        sta room_bg0
 
-       ldy #ROOM_META_BG1
+       ldy #ROOM_META_BASE + ROOM_META_BG1
        lda (room_base),y
        jsr convert_c64_color
        sta room_bg1
 
-       ldy #ROOM_META_BG2
+       ldy #ROOM_META_BASE + ROOM_META_BG2
        lda (room_base),y
        jsr convert_c64_color
        sta room_bg2
 
-       // Set background color
-       lda room_bg0
+       // Mirror observed C64 runtime behavior:
+       // shared background slot b0 is effectively forced to black.
+       lda #P4_BLACK
        sta TED_BG_COLOR
+
+       // In practice, the next two shared multicolor slots align best as:
+       // b1 <- room bg0, b2 <- room bg1.
+       lda room_bg0
+       sta TED_CHAR_COLOR1
+       lda room_bg1
+       sta TED_CHAR_COLOR2
 
        rts
 
@@ -132,7 +142,7 @@ read_room_metadata:
  */
 decompress_tile_definitions:
        // Get offset to tile definitions from room metadata
-       ldy #ROOM_META_TILEDEF
+       ldy #ROOM_META_BASE + ROOM_META_TILEDEF
        lda (room_base),y
        tax                          // Save low byte
        iny
@@ -176,7 +186,7 @@ decompress_tile_definitions:
  */
 decompress_tile_matrix:
        // Get offset to tile matrix from room metadata
-       ldy #ROOM_META_TILEMATRIX
+       ldy #ROOM_META_BASE + ROOM_META_TILEMATRIX
        lda (room_base),y
        tax
        iny
@@ -223,7 +233,7 @@ decompress_tile_matrix:
  */
 decompress_color_layer:
        // Get offset to color layer from room metadata
-       ldy #ROOM_META_COLOR
+       ldy #ROOM_META_BASE + ROOM_META_COLOR
        lda (room_base),y
        tax
        iny
@@ -322,8 +332,13 @@ copy_col_rows:
        sta (dest_screen),y
        ldy temp_y
 
+       // Treat room color-layer bytes as C64 multicolor cell attributes:
+       // low 3 bits = per-cell color index, bit3 = multicolor-cell enable.
+       // This avoids feeding full TED 121-color values into the cell-attribute
+       // byte, which can produce mode artifacts.
        lda (src_color),y
-       jsr convert_c64_color
+       and #$07
+       ora #$08
        sty temp_y
        ldy #$00
        sta (dest_color),y

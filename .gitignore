@@ -1,3 +1,6 @@
 room_png/*.bin
 room_png/*.txt
-plus4/__pycache__/
+plus4/__pycache__/*.*
+plus4/*.sym
+plus4/*.prg
+

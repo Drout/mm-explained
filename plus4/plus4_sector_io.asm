@@ -356,7 +356,8 @@ sec_dec_ones:
  * ===========================================
  */
 sector_stream_init:
-       sta sec_buf_off              // remember starting offset
+       sta sec_buf_off              // starting offset within first sector
+       sta sec_wrap_off             // offset to apply after each sector refill
        stx sec_cur_track
        sty sec_cur_sector
 
@@ -399,8 +400,9 @@ sector_stream_next:
        jsr sector_read
        bcs sector_stream_err
 
-       // After a fresh sector, resume at byte offset 2 to skip the T/S link.
-       lda #$02
+       // After a fresh sector, resume at the configured wrap offset.
+       // For room resources this is 0; for table/file-like streams this is 2.
+       lda sec_wrap_off
        sta sec_buf_off
 
 sector_stream_ok:
@@ -480,6 +482,8 @@ sec_dec_val:
 sec_dec_emitted:
        .byte $00
 sec_stream_byte:
+       .byte $00
+sec_wrap_off:
        .byte $00
 sec_saved_border:
        .byte $00

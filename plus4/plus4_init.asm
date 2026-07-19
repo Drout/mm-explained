@@ -51,8 +51,8 @@ init_plus4:
 
        // Configure video mode
        // Bits: 7=reverse, 6=NTSC/PAL, 5=?, 4=multicolor, 3=text mode
-       // We want standard text mode: bit 3 = 1, others = 0
-       lda #TED_TEXT_MODE
+       // Room tiles are multicolor character data, so keep text+multicolor enabled.
+       lda #TED_TEXT_MULTICOLOR
        sta TED_VIDEO_MODE
 
        // Configure character and screen base addresses

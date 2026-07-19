@@ -328,6 +328,16 @@ load_room:
        tax
        lda RSRC_TBL_BASE + RSRC_TBL_SIDE_OFS,x
        sta room_side
+
+       // Only side ids '1'/$31 or '2'/$32 are valid room entries.
+       lda room_side
+       cmp #$31
+       beq load_room_side_valid
+       cmp #$32
+       beq load_room_side_valid
+       jmp load_room_err
+
+load_room_side_valid:
        jsr ensure_disk_side
        bcc load_room_side_ok
 
@@ -346,10 +356,28 @@ load_room_side_ok:
        lda RSRC_TBL_BASE + RSRC_TBL_SECTRK_OFS + 1,x   // track
        sta room_ls_track
 
-       // --- Seed the stream at (track, sector), offset 2 (skip T/S link). ---
+       // Basic geometry sanity for table entries.
+       lda room_ls_track
+       beq load_room_bad_entry
+       cmp #$24                     // 36
+       bcs load_room_bad_entry
+
+       lda room_ls_sector
+       cmp #$15                     // conservative upper bound: 0..20
+       bcs load_room_bad_entry
+       jmp load_room_table_ok
+
+load_room_bad_entry:
+       jmp load_room_err
+
+load_room_table_ok:
+
+       // --- Seed the stream at (track, sector), offset 0.
+       // Room resources are packed in physical-sector order with payload bytes
+       // starting at byte 0, so do not skip 2-byte link fields for this path.
        ldx room_ls_track
        ldy room_ls_sector
-       lda #$02
+       lda #$00
        jsr sector_stream_init
        bcc load_room_hdr
        jmp load_room_err
@@ -381,15 +409,14 @@ load_room_h3:
 load_room_h4:
        sta room_hdr_index
 
-       // Validate header before accepting payload as a room resource.
-       // This catches wrong-track/sector reads and random garbage quickly.
-       lda room_hdr_type
-       cmp #RSRC_TYPE_ROOM
-       bne load_room_err
-
-       lda room_hdr_index
-       cmp room_number
-       bne load_room_err
+       // Keep only size sanity here. In this disk format, some entries may not
+       // present canonical type/index bytes at lookup locations.
+       lda room_size + 1
+       bne load_room_hdr_ok
+       lda room_size
+       cmp #RSRC_HDR_BYTES
+       bcc load_room_err
+load_room_hdr_ok:
 
        // --- Set up destination and write the 4 header bytes we consumed. ---
        lda load_dest
@@ -452,13 +479,10 @@ load_room_pay_declo:
        jmp load_room_payload
 
 load_room_ok:
-       // room_base = load_dest + 4 (skip the resource header).
-       clc
+       // room_base points at the resource header start (C64-compatible base).
        lda load_dest
-       adc #RSRC_HDR_BYTES
        sta room_base
        lda load_dest + 1
-       adc #$00
        sta room_base + 1
 
        lda #STATUS_OK

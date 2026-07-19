@@ -22,7 +22,7 @@
 .const SCNKEY = $FF9F         // Scan keyboard matrix now (don't rely only on IRQ)
 
 // Program configuration
-.const DEFAULT_ROOM    = $00   // Start room (entry room)
+.const DEFAULT_ROOM    = $01   // Start from first valid room table entry
 .const ROOM_DATA_BASE  = $4000 // Where to load room data
 
 /*

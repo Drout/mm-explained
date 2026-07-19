@@ -40,8 +40,11 @@ All TED registers are located at $FF00-$FF3F.
 .const TED_CHAR_BASE        = $FF13    // Character generator base address
 .const TED_SCREEN_BASE      = $FF14    // Screen memory base address / video address
 
-// For $0C00 (screen RAM) the encoding is ($0C00 / 1024) << 3 = $18.
-.const TED_SCREENBASE_0C00  = $18      // $FF14 value selecting screen at $0C00
+// $FF14 bits 7-3 select a 2KB window (address bits A15-A11), not a 1KB one.
+// Screen and color RAM are the two halves of that window: color = window
+// base, screen = window base + $400 (they move together, not independently).
+// For color $0800 / screen $0C00: field = $0800 >> 11 = 1, value = 1 << 3 = $08.
+.const TED_SCREENBASE_0C00  = $08      // $FF14 value selecting color $0800 / screen $0C00
 
 // Video timing
 .const TED_RASTER_LO        = $FF1C    // Current raster line (bits 7-0)
