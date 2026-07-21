@@ -49,11 +49,18 @@ init_plus4:
        lda #P4_LIGHT_GREY
        sta TED_CHAR_COLOR3
 
-       // Configure video mode
-       // Bits: 7=reverse, 6=NTSC/PAL, 5=?, 4=multicolor, 3=text mode
-       // Room tiles are multicolor character data, so keep text+multicolor enabled.
-       lda #TED_TEXT_MULTICOLOR
+       // Configure video mode: multicolor text.
+       // TED MCM is bit 4 of $FF07; ECM is in a separate register ($FF06 bit 6).
+       // Just set MCM without disturbing other bits.
+       lda TED_VIDEO_MODE
+       ora #TED_TEXT_MULTICOLOR // set bit 4 (MCM)
        sta TED_VIDEO_MODE
+
+       // Force TED to fetch glyphs from RAM charset, not ROM charset.
+       // $FF12 bit 2: 0 = RAM charset, 1 = ROM charset.
+       lda $FF12
+       and #%11111011
+       sta $FF12
 
        // Configure character and screen base addresses
        //
@@ -131,7 +138,9 @@ set_screen_color:
  */
 clear_color_ram:
        ldx #$00
-       lda #P4_BLACK
+       // Keep text visible during startup/error paths.
+       // The room renderer overwrites viewport colors after a successful load.
+       lda #P4_WHITE
 clear_color_loop:
        sta PLUS4_COLOR_RAM,x
        sta PLUS4_COLOR_RAM + $100,x

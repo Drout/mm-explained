@@ -22,7 +22,7 @@
 .const SCNKEY = $FF9F         // Scan keyboard matrix now (don't rely only on IRQ)
 
 // Program configuration
-.const DEFAULT_ROOM    = $01   // Start from first valid room table entry
+.const DEFAULT_ROOM    = $10   // Start from room 16 (disk side 1)
 .const ROOM_DATA_BASE  = $4000 // Where to load room data
 
 /*
@@ -32,8 +32,69 @@
  */
 .pc = $1100 "Main Program"
 main:
-       // Initialize Plus/4 hardware
+       // ----------------------------------------------------------------
+       // LITERAL COPY OF SECTOR DEMO: read T1/S1 into $7F00, then halt.
+       // No subroutines, no variables, no PrintDecIO -- exact sector_demo.
+       // Examine with "m7f00":  $7F02=room0 side  $7F03=room1 side ($32)
+       //                        $7F12=room16 side ($31)
+       // ----------------------------------------------------------------
+       lda #$00
+       jsr $FFBD            // K_SETNAM
+       lda #15
+       ldx #8
+       ldy #15
+       jsr $FFBA            // K_SETLFS
+       jsr $FFC0            // K_OPEN
+
+       lda #1
+       ldx #<early_hash
+       ldy #>early_hash
+       jsr $FFBD            // K_SETNAM
+       lda #2
+       ldx #8
+       ldy #2
+       jsr $FFBA            // K_SETLFS
+       jsr $FFC0            // K_OPEN
+
+       ldx #15
+       jsr $FFC9            // K_CHKOUT
+       ldy #$00
+early_cmd_loop:
+       lda early_u1_cmd,y
+       jsr $FFD2            // K_CHROUT
+       iny
+       cpy #11
+       bne early_cmd_loop
+       jsr $FFCC            // K_CLRCHN
+
+       ldx #2
+       jsr $FFC6            // K_CHKIN
+       ldy #$00
+early_read_loop:
+       jsr $FFCF            // K_CHRIN
+       sta $7F00,y
+       iny
+       bne early_read_loop
+       jsr $FFCC            // K_CLRCHN
+
+       lda #2
+       jsr $FFC3            // K_CLOSE
+       lda #15
+       jsr $FFC3            // K_CLOSE
+
+early_halt:
+       jmp early_halt       // halt — examine $7F00 with m7f00
+
+early_hash:
+       .text "#"
+early_u1_cmd:
+       .text "U1 2 0 4 19"  // track 4, sector 19 = first sector of room 16
+
+       // Normal startup (unreachable until halt removed)
        jsr init_plus4
+
+       // Show startup status so loader failures are not a silent black screen.
+       jsr print_startup_message
 
        // Initialize disk system: opens sector channels and loads the room
        // location tables from the game disk (side 1 must be inserted).

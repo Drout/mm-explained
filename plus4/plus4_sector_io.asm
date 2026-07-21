@@ -28,7 +28,7 @@
  *   sector_next_phys       Advance (track, sector) to the next physical sector.
  *
  * Buffer:
- *   SEC_BUFFER ($0700..$07FF) holds the most recently read 256-byte sector.
+ *   SEC_BUFFER ($1B00..$1BFF) holds the most recently read 256-byte sector.
  * ===============================================================================
  */
 #importonce
@@ -49,6 +49,7 @@
 .const K_CHROUT  = $FFD2    // Write byte to channel
 .const K_CLRCHN  = $FFCC    // Restore default I/O channels
 .const K_READST  = $FFB7    // Read I/O status
+.const K_GETIN   = $FFE4    // Get character from input
 
 /*
  * ===========================================
@@ -61,19 +62,24 @@
 .const SEC_DATA_SA     = 2      // Secondary address for the "#" buffer channel
 .const SEC_DRIVE       = 0      // Drive number within the unit (single-drive = 0)
 
-.const SEC_BUFFER      = $0700  // 256-byte raw sector buffer (page-aligned)
+.const SEC_BUFFER      = $7B00  // 256-byte raw sector buffer (moved from $1B00: program now
+                                // extends to ~$1B1C and must not overlap the sector buffer)
 
 /*
  * ===========================================
- * Zero-page streaming state
+ * Streaming state (absolute RAM, NOT zero-page)
  *
- * These mirror the C64 engine's streaming cursor so the higher-level room loader
- * can pull bytes without caring about sector boundaries.
+ * These were previously zero-page labels at $57-$60. The Plus/4 KERNAL's
+ * IEC serial and IRQ routines clobber those ZP locations (especially $59)
+ * during K_CHRIN, corrupting the intra-sector read cursor. Moving them to
+ * absolute RAM (defined at the end of this file alongside sec_wrap_off)
+ * prevents silent corruption of the streaming position.
  * ===========================================
+ *
+ * Forward declarations — the .byte storage is at the end of this file.
+ * KickAssembler resolves these after a full pass, so they can be used
+ * before their storage site.
  */
-.label sec_cur_track   = $A7    // Current physical track being streamed
-.label sec_cur_sector  = $A8    // Current physical sector (0-based) being streamed
-.label sec_buf_off     = $A9    // 0..255 read cursor within SEC_BUFFER
 
 /*
  * ===========================================
@@ -88,25 +94,26 @@
  * Output: carry clear = success, carry set = open failed
  * ===========================================
  */
+// sector_open_channels / sector_close_channels bracket each multi-sector
+// loading session (table load and room load each open/close once).  This
+// avoids the per-sector OPEN/CLOSE overhead while keeping YAPE happy.
 sector_open_channels:
-       // --- Open command channel: OPEN 15,8,15,"" ---
-       lda #$00                     // filename length 0
+       lda #$00
        jsr K_SETNAM
        lda #SEC_CMD_LFN
        ldx #SEC_DEVICE
-       ldy #SEC_CMD_LFN             // SA 15 = command channel
+       ldy #SEC_CMD_LFN
        jsr K_SETLFS
        jsr K_OPEN
        bcs sector_open_fail
 
-       // --- Open data channel: OPEN 2,8,2,"#" ---
-       lda #$01                     // filename length 1
+       lda #$01
        ldx #<sec_hash_name
        ldy #>sec_hash_name
        jsr K_SETNAM
        lda #SEC_DATA_LFN
        ldx #SEC_DEVICE
-       ldy #SEC_DATA_SA             // SA 2 = direct-access buffer
+       ldy #SEC_DATA_SA
        jsr K_SETLFS
        jsr K_OPEN
        bcs sector_open_fail
@@ -119,7 +126,7 @@ sector_open_fail:
        rts
 
 sec_hash_name:
-       .text "#"                    // request any free drive buffer
+       .text "#"
 
 /*
  * ===========================================
@@ -134,6 +141,7 @@ sector_close_channels:
        jsr K_CLOSE
        lda #SEC_CMD_LFN
        jsr K_CLOSE
+       jsr K_CLRCHN
        rts
 
 /*
@@ -154,194 +162,139 @@ sector_read:
        stx sec_rd_track
        sty sec_rd_sector
 
-       // Visual probe: flash border during each physical sector read so disk
-       // activity is obvious in emulators and on real hardware.
+       inc sec_read_count
+       lda sec_read_count
+       sta PLUS4_SCREEN_RAM + 3
+
        lda TED_BORDER_COLOR
        sta sec_saved_border
        lda #P4_RED
        sta TED_BORDER_COLOR
 
-       // Build the U1 command string in sec_cmd_buf.
-       jsr sector_build_u1
-       bcs sector_read_fail         // build failed (shouldn't happen)
+       // Open channels fresh for every read, exactly as the sector demo does.
+       // The demo does NOT check carry from K_OPEN and it works — on Plus/4
+       // K_OPEN for device 8 can return carry set as a status flag yet still
+       // open the channel successfully.
+       lda #$00
+       jsr K_SETNAM
+       lda #SEC_CMD_LFN
+       ldx #SEC_DEVICE
+       ldy #SEC_CMD_LFN
+       jsr K_SETLFS
+       jsr K_OPEN              // no carry check (matches sector demo)
 
-       // Send the command on the command channel (#15).
+       lda #$01
+       ldx #<sec_hash_name
+       ldy #>sec_hash_name
+       jsr K_SETNAM
+       lda #SEC_DATA_LFN
+       ldx #SEC_DEVICE
+       ldy #SEC_DATA_SA
+       jsr K_SETLFS
+       jsr K_OPEN              // no carry check (matches sector demo)
+
+       // Send U1 command on channel 15.
        ldx #SEC_CMD_LFN
        jsr K_CHKOUT
-       bcs sector_read_fail
 
        ldy #$00
-sector_cmd_send:
-       lda sec_cmd_buf,y
-       cmp #$FF                     // $FF = end-of-string sentinel
-       beq sector_cmd_sent
+sec_cmd_loop:
+       lda sec_cmd_u1_prefix,y
        jsr K_CHROUT
        iny
-       bne sector_cmd_send
-
-sector_cmd_sent:
+       cpy #7
+       bne sec_cmd_loop
+       lda sec_rd_track
+       jsr PrintDecIO
+       lda #' '
+       jsr K_CHROUT
+       lda sec_rd_sector
+       jsr PrintDecIO
        jsr K_CLRCHN
 
-       // Now read 256 data bytes back from the data channel (#2).
+       // Read 256 bytes from data channel 2.
        ldx #SEC_DATA_LFN
        jsr K_CHKIN
-       bcs sector_read_fail
 
        ldy #$00
-sector_data_read:
-       jsr K_READST                 // check drive/serial status
-       bne sector_read_status_bad   // any non-zero status aborts
+sec_data_loop:
        jsr K_CHRIN
        sta SEC_BUFFER,y
        iny
-       bne sector_data_read         // loop until 256 bytes read (Y wraps to 0)
-
+       bne sec_data_loop
        jsr K_CLRCHN
-       lda sec_saved_border
-       sta TED_BORDER_COLOR
-       clc
-       rts
 
-sector_read_status_bad:
-       jsr K_CLRCHN
-sector_read_fail:
-       lda sec_saved_border
-       sta TED_BORDER_COLOR
-       sec
-       rts
-
-/*
- * ===========================================
- * sector_build_u1
- *
- * Builds an ASCII "U1 ch drv track sector" command string terminated with $FF.
- *
- * Input:  sec_rd_track, sec_rd_sector
- * Output: sec_cmd_buf populated; carry clear
- * ===========================================
- */
-sector_build_u1:
-       ldx #$00                     // write index into sec_cmd_buf
-
-       lda #'U'
-       sta sec_cmd_buf,x
-       inx
-       lda #'1'
-       sta sec_cmd_buf,x
-       inx
-       lda #' '
-       sta sec_cmd_buf,x
-       inx
-
-       // data channel number (single digit)
+       // Close channels (matches sector demo).
        lda #SEC_DATA_LFN
-       clc
-       adc #'0'
-       sta sec_cmd_buf,x
-       inx
-       lda #' '
-       sta sec_cmd_buf,x
-       inx
+       jsr K_CLOSE
+       lda #SEC_CMD_LFN
+       jsr K_CLOSE
 
-       // drive number (single digit)
-       lda #SEC_DRIVE
-       clc
-       adc #'0'
-       sta sec_cmd_buf,x
-       inx
-       lda #' '
-       sta sec_cmd_buf,x
-       inx
-
-       // track (1-3 decimal digits)
        lda sec_rd_track
-       jsr sector_emit_dec
-       lda #' '
-       sta sec_cmd_buf,x
-       inx
-
-       // sector (1-3 decimal digits)
+       sta sec_cur_track
        lda sec_rd_sector
-       jsr sector_emit_dec
+       sta sec_cur_sector
 
-       // terminator
-       lda #$FF
-       sta sec_cmd_buf,x
-
+       lda sec_saved_border
+       sta TED_BORDER_COLOR
        clc
+       rts
+
+sector_read_fail:
+       jsr K_CLRCHN
+       lda sec_saved_border
+       sta TED_BORDER_COLOR
+       sec
        rts
 
 /*
  * ===========================================
- * sector_emit_dec
+ * PrintDecIO
  *
- * Appends the decimal representation of A (0..255) to sec_cmd_buf at index X.
- * Suppresses leading zeros but always emits at least one digit.
- *
- * Input:  A = value, X = current write index into sec_cmd_buf
- * Output: X advanced past the digits written; A/Y clobbered
+ * Emits A as decimal ASCII to the currently selected output channel.
+ * Suppresses leading zeros but always outputs at least one digit.
+ * Clobbers A, X. Uses PTR_NEXT ($60) as scratch.
  * ===========================================
  */
-sector_emit_dec:
-       sta sec_dec_val
-
-       // Hundreds digit
-       ldy #$00
-sec_dec_hund:
-       lda sec_dec_val
+PrintDecIO:
+       ldx #$00
+pd_h:
        cmp #100
-       bcc sec_dec_hund_done
-       sec
-       sbc #100
-       sta sec_dec_val
-       iny
-       jmp sec_dec_hund
-sec_dec_hund_done:
-       cpy #$00
-       beq sec_dec_skip_hund        // no hundreds -> skip (leading zero)
-       tya
-       clc
-       adc #'0'
-       sta sec_cmd_buf,x
+       bcc pd_tens             // A < 100: done counting hundreds
+       sbc #100                // carry set by cmp, so sbc = A-100
        inx
-       lda #$01
-       sta sec_dec_emitted
-       jmp sec_dec_tens
-sec_dec_skip_hund:
-       lda #$00
-       sta sec_dec_emitted
-
-sec_dec_tens:
-       ldy #$00
-sec_dec_tens_loop:
-       lda sec_dec_val
+       jmp pd_h
+pd_tens:
+       stx PTR_NEXT            // save hundreds digit
+       ldx #$00
+pd_t:
        cmp #10
-       bcc sec_dec_tens_done
-       sec
-       sbc #10
-       sta sec_dec_val
-       iny
-       jmp sec_dec_tens_loop
-sec_dec_tens_done:
-       // Emit tens digit if non-zero OR a higher digit was already emitted.
-       cpy #$00
-       bne sec_dec_emit_tens
-       lda sec_dec_emitted
-       beq sec_dec_ones             // suppress leading zero
-sec_dec_emit_tens:
-       tya
-       clc
-       adc #'0'
-       sta sec_cmd_buf,x
+       bcc pd_ones             // A < 10: done counting tens
+       sbc #10                 // carry set by cmp, so sbc = A-10
        inx
-
-sec_dec_ones:
-       // Ones digit is always emitted.
-       lda sec_dec_val
+       jmp pd_t
+pd_ones:
+       pha                     // save ones digit
+       lda PTR_NEXT
+       beq pd_no_h             // hundreds == 0: suppress it
        clc
-       adc #'0'
-       sta sec_cmd_buf,x
-       inx
+       adc #'0'                // '0' + hundreds digit
+       jsr K_CHROUT
+pd_no_h:
+       txa                     // tens digit
+       bne pd_do_t             // tens != 0: always print
+       lda PTR_NEXT
+       beq pd_no_t             // both hundreds and tens 0: suppress tens
+pd_do_t:
+       txa
+       clc
+       adc #'0'                // '0' + tens digit
+       jsr K_CHROUT
+pd_no_t:
+       pla
+       clc
+       adc #'0'                // '0' + ones digit (always printed)
+       jsr K_CHROUT
        rts
 
 /*
@@ -365,7 +318,16 @@ sector_stream_init:
        ldx sec_cur_track
        ldy sec_cur_sector
        jsr sector_read
-       rts                          // carry reflects sector_read result
+       bcs sector_stream_init_err
+       // KERNAL calls inside sector_read clobber sec_buf_off ($A9).
+       // Restore it from sec_wrap_off which is a non-ZP variable and is safe.
+       lda sec_wrap_off
+       sta sec_buf_off
+       clc
+       rts
+sector_stream_init_err:
+       sec
+       rts
 
 /*
  * ===========================================
@@ -477,16 +439,28 @@ sec_rd_track:
        .byte $00
 sec_rd_sector:
        .byte $00
-sec_dec_val:
-       .byte $00
-sec_dec_emitted:
-       .byte $00
 sec_stream_byte:
        .byte $00
 sec_wrap_off:
        .byte $00
 sec_saved_border:
        .byte $00
+sec_status_ch0:
+       .byte $00
+sec_status_ch1:
+       .byte $00
+// Streaming cursor — moved here from ZP to survive KERNAL IRQ clobbering.
+sec_cur_track:
+       .byte $00
+sec_cur_sector:
+       .byte $00
+sec_buf_off:
+       .byte $00
+sec_read_count:
+       .byte $00
+// Scratch digit store for PrintDecIO (moved from ZP $60).
+PTR_NEXT:
+       .byte $00
 
-sec_cmd_buf:
-       .fill 20, $00                // "U1 c d ttt sss" + $FF terminator
+sec_cmd_u1_prefix:
+       .text "U1 2 0 "

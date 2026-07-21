@@ -101,17 +101,19 @@ All TED registers are located at $FF00-$FF3F.
 
 // Room rendering memory layout
 .const ROOM_SCREEN_BASE     = $0C00    // Screen memory for room display
-// The assembled program occupies $1001-$19xx, so the tile charset cannot live
-// at $1000 without overwriting the program. Use safe RAM above the transient
-// layer buffers instead.
-.const ROOM_CHARSET_BASE    = $3000    // Character set for room tiles (2KB used)
-.const ROOM_TILE_MATRIX     = $2000    // Decompressed tile matrix
-.const ROOM_COLOR_BUFFER    = $2400    // Decompressed color layer
-.const ROOM_MASK_BUFFER     = $2800    // Decompressed mask layer
+// Wide rooms reach 160x17 tiles (= $0AA0 bytes per layer), so the transient
+// tile/color buffers must be substantially larger than 1 KB.
+.const ROOM_LAYER_MAX_BYTES = $0AA0    // Max decoded bytes for a room layer (160 * 17)
+.const ROOM_TILE_MATRIX     = $1C00    // Decompressed tile matrix ($0AA0 bytes, safe above code end ~$1ABE)
+.const ROOM_COLOR_BUFFER    = $2700    // Decompressed color layer ($0AA0 bytes, after tile matrix)
+.const ROOM_MASK_BUFFER     = $3000    // Reserved for future mask decode path
+// Keep the room tile charset above the transient layer buffers and below the
+// room resource load address at $4000.
+.const ROOM_CHARSET_BASE    = $3800    // Character set for room tiles (2KB used)
 
 // $FF13 holds the character base in bits 7-2 (address / 1024, shifted into
-// bits 7-2). For the room tile font at $3000: ($3000 / 1024) << 2 = 12 << 2 = $30.
-.const TED_CHARBASE_TILES   = $30      // $FF13 value selecting a font at $3000
+// bits 7-2). For the room tile font at $3800: ($3800 / 1024) << 2 = 14 << 2 = $38.
+.const TED_CHARBASE_TILES   = $38      // $FF13 value selecting a font at $3800
 
 // ============================================================================
 // Screen Layout Constants

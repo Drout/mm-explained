@@ -53,28 +53,62 @@
  * ===========================================
  */
 render_room:
+       // stage marker byte in screen RAM: render entered
+       lda #$B1
+       sta PLUS4_SCREEN_RAM
+
        // Read room metadata
        jsr read_room_metadata
+
+       lda #$B2
+       sta PLUS4_SCREEN_RAM
 
        // Decompress tile definitions to character RAM
        jsr decompress_tile_definitions
 
+       lda #$B3
+       sta PLUS4_SCREEN_RAM
+
+       // Remove startup/status text before switching to the room tile charset.
+       // Otherwise the old PETSCII screen codes render as arbitrary room tiles.
+       jsr clear_screen
+
+       lda #$B4
+       sta PLUS4_SCREEN_RAM
+
        // Now that a valid tile font exists at ROOM_CHARSET_BASE, point the TED character
        // generator at it. $FF13 encodes the base as (address / 1024) << 2,
-       // so $3000 -> $30 (see TED_CHARBASE_TILES). Doing this only after the
+       // so ROOM_CHARSET_BASE -> TED_CHARBASE_TILES. Doing this only after the
        // font is present avoids drawing characters from empty RAM and avoids
        // overwriting the program, which occupies $1001-$19xx.
+       // Also force RAM charset source in case ROM charset mode was re-enabled.
+       lda $FF12
+       and #%11111011
+       sta $FF12
+
        lda #TED_CHARBASE_TILES
        sta TED_CHAR_BASE
+
+       lda #$B5
+       sta PLUS4_SCREEN_RAM
 
        // Decompress tile matrix
        jsr decompress_tile_matrix
 
+       lda #$B6
+       sta PLUS4_SCREEN_RAM
+
        // Decompress color layer
        jsr decompress_color_layer
 
+       lda #$B7
+       sta PLUS4_SCREEN_RAM
+
        // Copy to screen with colors
        jsr copy_room_to_screen
+
+       lda #$BF
+       sta PLUS4_SCREEN_RAM
 
        rts
 

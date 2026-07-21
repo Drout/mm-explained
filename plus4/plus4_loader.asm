@@ -63,7 +63,7 @@
  * Variables
  * ===========================================
  */
-.label load_dest        = $5C   // 16-bit destination address for load
+.label load_dest        = $FB   // 16-bit destination address for load ($FB safe from KERNAL clobber)
 .label load_size        = $5E   // 16-bit size of loaded data
 .label filename_ptr     = $60   // 16-bit pointer to filename
 .label filename_len     = $62   // Filename length
@@ -90,20 +90,21 @@
  * ===========================================
  */
 init_disk:
-       lda #STATUS_OK
+       // sector_read is now self-contained (open/close per call), so no
+       // pre-open is needed here.  Just load the tables directly.
+       jsr load_location_tables
        sta io_status
-
-       // Open command + data channels for U1 block reads.
-       jsr sector_open_channels
-       bcc init_disk_tables
-
-       lda #$FF
-       sta io_status
+       // Diagnostics: show side-table bytes after the load.
+       //   $0C08 = RSRC_TBL_BASE+1  = room 1 side  (expected $32)
+       //   $0C09 = RSRC_TBL_BASE+16 = room 16 side (expected $31)
+       lda RSRC_TBL_BASE + 1
+       sta PLUS4_SCREEN_RAM + 8
+       lda RSRC_TBL_BASE + 16
+       sta PLUS4_SCREEN_RAM + 9
        rts
 
-init_disk_tables:
-       // Load the resource-location tables (side + track/sector per room).
-       jsr load_location_tables
+init_disk_err:
+       lda #$FF
        sta io_status
        rts
 
@@ -124,6 +125,8 @@ init_disk_tables:
  * ===========================================
  */
 load_location_tables:
+       // sector_read opens/closes channels itself; no wrapper needed here.
+
        // Seed the stream at T1/S1, byte offset 2.
        ldx #RSRC_TBL_DISK_TRACK
        ldy #RSRC_TBL_DISK_SECTOR
@@ -131,48 +134,81 @@ load_location_tables:
        jsr sector_stream_init
        bcs load_tables_err
 
-       // Destination = RSRC_TBL_BASE
-       lda #<RSRC_TBL_BASE
-       sta room_dest
-       lda #>RSRC_TBL_BASE
-       sta room_dest + 1
+       // ── Diagnostic block: 6 bytes from SEC_BUFFER ──────────────────────
+       // All of these should be non-zero for the test to have succeeded.
+       // $0C05 = $AA  sentinel: sector_stream_init returned success
+       // $0C06 = SEC_BUFFER[2]  = room 0 side   (expected $00)
+       // $0C07 = SEC_BUFFER[3]  = room 1 side   (expected $32)
+       // $0C0A = SEC_BUFFER[18] = room 16 side  (expected $31)
+       // $0C0B = SEC_BUFFER[4]  = room 2 side   (expected $32)
+       // $0C0C = SEC_BUFFER[5]  = room 3 side   (expected $32)
+       // If $0C07/$0C0A/$0C0B/$0C0C are all $00 the U1 read returned zeros.
+       lda #$AA
+       sta PLUS4_SCREEN_RAM + 5       // sentinel
+       lda SEC_BUFFER + 2
+       sta PLUS4_SCREEN_RAM + 6
+       lda SEC_BUFFER + 3
+       sta PLUS4_SCREEN_RAM + 7
+       lda SEC_BUFFER + 18
+       sta PLUS4_SCREEN_RAM + 10      // $0C0A
+       lda SEC_BUFFER + 4
+       sta PLUS4_SCREEN_RAM + 11      // $0C0B
+       lda SEC_BUFFER + 5
+       sta PLUS4_SCREEN_RAM + 12      // $0C0C
+       // ─────────────────────────────────────────────────────────────────────
 
-       // Copy RSRC_TBL_BYTES bytes.
+       // Use self-modifying STA to write to RSRC_TBL_BASE without any
+       // ZP-indirect addressing.  The KERNAL synchronously clobbers the
+       // ZP pointers used by (room_dest),Y so we bypass ZP entirely.
+       //
+       // tbl_sta_abs is a 3-byte absolute STA instruction; we modify its
+       // address operand (bytes +1 and +2) to advance the write pointer.
+       sei                          // guard absolute streaming state from IRQ
+
+       lda #<RSRC_TBL_BASE
+       sta tbl_sta_abs + 1          // lo byte of STA destination
+       sta PLUS4_SCREEN_RAM + 13    // $0C0D: confirm lo byte written ($00)
+       lda #>RSRC_TBL_BASE
+       sta tbl_sta_abs + 2          // hi byte of STA destination
+       sta PLUS4_SCREEN_RAM + 14    // $0C0E: confirm hi byte written ($60)
+
        lda #<RSRC_TBL_BYTES
-       sta room_size
+       sta tbl_count_lo
        lda #>RSRC_TBL_BYTES
-       sta room_size + 1
+       sta tbl_count_hi
 
 load_tables_loop:
-       // Stop when the 16-bit counter reaches zero.
-       lda room_size
-       ora room_size + 1
+       lda tbl_count_lo
+       ora tbl_count_hi
        beq load_tables_done
 
-       jsr sector_stream_next
-       bcs load_tables_err
+       jsr sector_stream_next       // direct call — no ZP save/restore needed
+       bcs load_tables_err_sei
 
-       ldy #$00
-       sta (room_dest),y
+tbl_sta_abs:
+       sta $6000                    // address self-modified: always absolute STA
 
-       // Advance destination pointer.
-       inc room_dest
-       bne load_tables_dec
-       inc room_dest + 1
+       // Advance destination inside the instruction.
+       inc tbl_sta_abs + 1
+       bne tbl_no_carry
+       inc tbl_sta_abs + 2
+tbl_no_carry:
 
-load_tables_dec:
        // Decrement 16-bit counter.
-       lda room_size
-       bne load_tables_declo
-       dec room_size + 1
-load_tables_declo:
-       dec room_size
+       lda tbl_count_lo
+       bne tbl_dec_lo
+       dec tbl_count_hi
+tbl_dec_lo:
+       dec tbl_count_lo
        jmp load_tables_loop
 
 load_tables_done:
+       cli                          // re-enable KERNAL IRQ
        lda #STATUS_OK
        rts
 
+load_tables_err_sei:
+       cli                          // re-enable KERNAL IRQ before close
 load_tables_err:
        lda #$FF
        rts
@@ -324,17 +360,43 @@ load_room:
        // Save room number.
        sta room_number
 
+       // Save load_dest to room_load_base — a dedicated non-ZP variable that
+       // loader_save_zp_state never touches. loader_saved_load_dest gets
+       // overwritten by every loader_save_zp_state call so it cannot hold the
+       // original $4000 destination reliably.
+       lda load_dest
+       sta room_load_base
+       lda load_dest + 1
+       sta room_load_base + 1
+
+       // Debug stage probe at $0C01 (loader path).
+       lda #$A1                     // entered load_room
+       sta PLUS4_SCREEN_RAM + 1
+
+       lda #$00
+       sta sec_read_count
+       sta PLUS4_SCREEN_RAM + 3
+
        // --- Look up required disk side and verify it is mounted. ---
+       lda room_number
        tax
        lda RSRC_TBL_BASE + RSRC_TBL_SIDE_OFS,x
        sta room_side
 
-       // Only side ids '1'/$31 or '2'/$32 are valid room entries.
+       lda room_side
+       sta PLUS4_SCREEN_RAM + 4
+
+       // Room side bytes in the D64 table are ASCII ('1'/'2').
        lda room_side
        cmp #$31
        beq load_room_side_valid
        cmp #$32
        beq load_room_side_valid
+       jmp load_room_bad_side
+
+load_room_bad_side:
+       lda #$B1
+       sta PLUS4_SCREEN_RAM + 5
        jmp load_room_err
 
 load_room_side_valid:
@@ -346,6 +408,9 @@ load_room_side_valid:
        rts
 
 load_room_side_ok:
+       lda #$A2                     // side accepted
+       sta PLUS4_SCREEN_RAM + 1
+
        // --- Fetch (SECTOR, TRACK) pair: index = room*2 into sec/trk table. ---
        lda room_number
        asl                          // room * 2
@@ -355,6 +420,11 @@ load_room_side_ok:
        sta room_ls_sector
        lda RSRC_TBL_BASE + RSRC_TBL_SECTRK_OFS + 1,x   // track
        sta room_ls_track
+
+       lda room_ls_sector
+       sta PLUS4_SCREEN_RAM + 5
+       lda room_ls_track
+       sta PLUS4_SCREEN_RAM + 6
 
        // Basic geometry sanity for table entries.
        lda room_ls_track
@@ -368,60 +438,122 @@ load_room_side_ok:
        jmp load_room_table_ok
 
 load_room_bad_entry:
+       lda #$B2
+       sta PLUS4_SCREEN_RAM + 5
        jmp load_room_err
 
 load_room_table_ok:
+       lda #$C1                     // about to seed room sector stream
+       sta PLUS4_SCREEN_RAM + 2
+
+       // sector_read is now self-contained; no separate channel open needed.
+load_room_stream_seed:
 
        // --- Seed the stream at (track, sector), offset 0.
-       // Room resources are packed in physical-sector order with payload bytes
-       // starting at byte 0, so do not skip 2-byte link fields for this path.
+       // Room resources on the Maniac Mansion disk begin at byte 0 of their
+       // sector (no T/S link prefix).  The Python extractor confirms this
+       // with skip_bytes=0 for room payloads.  Using $02 here misaligned the
+       // 4-byte resource header, causing the size/type/index bytes to be
+       // read from the wrong positions.
        ldx room_ls_track
        ldy room_ls_sector
        lda #$00
        jsr sector_stream_init
        bcc load_room_hdr
+       lda #$B3
+       sta PLUS4_SCREEN_RAM + 5
        jmp load_room_err
 
 load_room_hdr:
+       lda #$C2                     // sector stream initialized
+       sta PLUS4_SCREEN_RAM + 2
+
+       lda #$A3                     // stream seeded
+       sta PLUS4_SCREEN_RAM + 1
+
        // --- Read the 4-byte resource header to learn total size. ---
        // Header: +0 size.lo, +1 size.hi, +2 type, +3 index.
-       jsr sector_stream_next
+       jsr loader_stream_next_safe
        bcc load_room_h1
+       lda #$B4
+       sta PLUS4_SCREEN_RAM + 5
        jmp load_room_err
 load_room_h1:
+       lda #$C3                     // first header byte read
+       sta PLUS4_SCREEN_RAM + 2
+
        sta room_size                // size low
 
-       jsr sector_stream_next
+       jsr loader_stream_next_safe
        bcc load_room_h2
+       lda #$B5
+       sta PLUS4_SCREEN_RAM + 5
        jmp load_room_err
 load_room_h2:
+       lda #$C4                     // second header byte read
+       sta PLUS4_SCREEN_RAM + 2
+
        sta room_size + 1            // size high
 
-       jsr sector_stream_next       // type byte (discard here; kept in stream copy)
+       jsr loader_stream_next_safe  // type byte (discard here; kept in stream copy)
        bcc load_room_h3
+       lda #$B6
+       sta PLUS4_SCREEN_RAM + 5
        jmp load_room_err
 load_room_h3:
+       lda #$C5                     // third header byte read
+       sta PLUS4_SCREEN_RAM + 2
+
        sta room_hdr_type
 
-       jsr sector_stream_next       // index byte
+       // Disk-header byte +2 must be the sentinel 0 in the C64 format.
+       // If not, the stream origin/alignment is wrong.
+       cmp #$00
+       bne load_room_bad_header
+
+       jsr loader_stream_next_safe  // index byte
        bcc load_room_h4
+       lda #$B7
+       sta PLUS4_SCREEN_RAM + 5
        jmp load_room_err
 load_room_h4:
-       sta room_hdr_index
+       lda #$C6                     // fourth header byte read
+       sta PLUS4_SCREEN_RAM + 2
 
-       // Keep only size sanity here. In this disk format, some entries may not
-       // present canonical type/index bytes at lookup locations.
+       sta room_hdr_index
+       jmp load_room_hdr_sanity
+
+load_room_bad_header:
+       lda #$B8
+       sta PLUS4_SCREEN_RAM + 5
+       jmp load_room_err
+
+load_room_hdr_sanity:
+
+       // Keep only size sanity here.
        lda room_size + 1
        bne load_room_hdr_ok
        lda room_size
        cmp #RSRC_HDR_BYTES
-       bcc load_room_err
-load_room_hdr_ok:
+       bcc load_room_sanity_fail
+       jmp load_room_hdr_ok
 
-       // --- Set up destination and write the 4 header bytes we consumed. ---
-       lda load_dest
+load_room_sanity_fail:
+       lda #$B9                     // sanity fail: size too small
+       sta PLUS4_SCREEN_RAM + 5
+       jmp load_room_err
+load_room_hdr_ok:
+       lda #$A4                     // header accepted
+       sta PLUS4_SCREEN_RAM + 1
+
+       // DIAGNOSTIC: $BB here means load_room_hdr_ok was reached
+       lda #$BB
+       sta $4000
+
+       // Hardcode destination: always $4000.  Eliminates all variable issues.
+       lda #<ROOM_DATA_BASE         // = $00
        sta room_dest
-       lda load_dest + 1
+       lda #>ROOM_DATA_BASE         // = $40
        sta room_dest + 1
 
        ldy #$00
@@ -460,7 +592,7 @@ load_room_payload:
        ora room_size + 1
        beq load_room_ok
 
-       jsr sector_stream_next
+       jsr loader_stream_next_safe
        bcs load_room_err
 
        ldy #$00
@@ -479,19 +611,100 @@ load_room_pay_declo:
        jmp load_room_payload
 
 load_room_ok:
-       // room_base points at the resource header start (C64-compatible base).
-       lda load_dest
+       lda #<ROOM_DATA_BASE
        sta room_base
-       lda load_dest + 1
+       lda #>ROOM_DATA_BASE
        sta room_base + 1
+
+       lda #$AF                     // room payload loaded
+       sta PLUS4_SCREEN_RAM + 1
+
+       // BORDER = GREEN: room loaded successfully
+       lda #$53
+       sta TED_BORDER_COLOR
 
        lda #STATUS_OK
        sta io_status
        rts
 
 load_room_err:
+       lda #$EE                     // loader failed
+       sta PLUS4_SCREEN_RAM + 1
+
+       // BORDER = RED: room load failed
+       lda #$32
+       sta TED_BORDER_COLOR
+
        lda #$FF
        sta io_status
+       rts
+
+/*
+ * ===========================================
+ * Safe stream byte fetch for loader code
+ *
+ * KERNAL-backed IEC routines may clobber low zero-page bytes used by this
+ * loader for pointers/counters. Preserve/restore the loader state around each
+ * streamed byte read.
+ *
+ * Output: A = stream byte, C clear on success / set on read error
+ * ===========================================
+ */
+loader_stream_next_safe:
+       jsr loader_save_zp_state
+       jsr sector_stream_next
+       sta loader_stream_byte
+       bcc loader_stream_ok
+
+       jsr loader_restore_zp_state
+       lda loader_stream_byte
+       sec
+       rts
+
+loader_stream_ok:
+       jsr loader_restore_zp_state
+       lda loader_stream_byte
+       clc
+       rts
+
+loader_save_zp_state:
+       lda load_dest
+       sta loader_saved_load_dest
+       lda load_dest + 1
+       sta loader_saved_load_dest + 1
+
+       lda room_size
+       sta loader_saved_room_size
+       lda room_size + 1
+       sta loader_saved_room_size + 1
+
+       lda room_dest
+       sta loader_saved_room_dest
+       lda room_dest + 1
+       sta loader_saved_room_dest + 1
+
+       lda room_side
+       sta loader_saved_room_side
+       rts
+
+loader_restore_zp_state:
+       lda loader_saved_load_dest
+       sta load_dest
+       lda loader_saved_load_dest + 1
+       sta load_dest + 1
+
+       lda loader_saved_room_size
+       sta room_size
+       lda loader_saved_room_size + 1
+       sta room_size + 1
+
+       lda loader_saved_room_dest
+       sta room_dest
+       lda loader_saved_room_dest + 1
+       sta room_dest + 1
+
+       lda loader_saved_room_side
+       sta room_side
        rts
 
 /*
@@ -640,7 +853,7 @@ room_hdr_index:
 
 // Currently mounted disk side (as an id from room_disk_side_tbl).
 active_side_id:
-       .byte $01              // assume side 1 mounted at startup
+       .byte $31              // assume side 1 mounted at startup (ASCII '1')
 
 room_filename:
        .text "ROOM00"        // Buffer for room filename (legacy load_file helper)
@@ -650,6 +863,31 @@ error_message:
 
 temp_error:
        .byte $00
+
+tbl_count_lo:
+       .byte $00
+tbl_count_hi:
+       .byte $00
+
+loader_stream_byte:
+       .byte $00
+
+loader_saved_load_dest:
+       .byte $00, $00
+
+loader_saved_room_size:
+       .byte $00, $00
+
+loader_saved_room_dest:
+       .byte $00, $00
+
+loader_saved_room_side:
+       .byte $00
+
+// Dedicated save of the room payload destination address.
+// Unlike loader_saved_load_dest this is NEVER touched by loader_save_zp_state.
+room_load_base:
+       .byte $00, $00
 
 /*
  * ===========================================

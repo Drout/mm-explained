@@ -26,7 +26,7 @@ main:
 
        // Configure TED for text mode, black background/border.
        lda $FF07
-       ora #$80
+       ora #$90
        sta $FF07
 
        lda #$00
@@ -65,28 +65,16 @@ hang:
  * ===========================================
  */
 fill_screen_codes:
-       lda #<$0C00
-       sta scr_ptr
-       lda #>$0C00
-       sta scr_ptr + 1
-
-       lda #$00
-       sta code_val
-
-       // Fill 4 contiguous 256-byte pages = 1024 bytes.
-       ldx #$04
-screen_page_loop:
-       ldy #$00
-screen_byte_loop:
-       lda code_val
-       sta (scr_ptr),y
-       inc code_val
-       iny
-       bne screen_byte_loop
-
-       inc scr_ptr + 1
-       dex
-       bne screen_page_loop
+       // Fill $0C00-$0FFF directly (4 x 256 bytes).
+       ldx #$00
+screen_fill_loop:
+       txa
+       sta $0C00,x
+       sta $0D00,x
+       sta $0E00,x
+       sta $0F00,x
+       inx
+       bne screen_fill_loop
        rts
 
 /*
@@ -97,28 +85,18 @@ screen_byte_loop:
  * ===========================================
  */
 fill_color_ram:
-       lda #<$0800
-       sta col_ptr
-       lda #>$0800
-       sta col_ptr + 1
-
        // White on black, single-color text cell.
-       lda #$01
-       sta color_val
+       lda #$7F
 
-       // Fill 4 contiguous 256-byte pages = 1024 bytes.
-       ldx #$04
-color_page_loop:
-       ldy #$00
-color_byte_loop:
-       lda color_val
-       sta (col_ptr),y
-       iny
-       bne color_byte_loop
-
-       inc col_ptr + 1
-       dex
-       bne color_page_loop
+       // Fill $0800-$0BFF directly (4 x 256 bytes).
+       ldx #$00
+color_fill_loop:
+       sta $0800,x
+       sta $0900,x
+       sta $0A00,x
+       sta $0B00,x
+       inx
+       bne color_fill_loop
        rts
 
 /*
@@ -126,11 +104,7 @@ color_byte_loop:
  * ZP vars
  * ===========================================
  */
-.label cs_ptr    = $70
-.label scr_ptr   = $72
-.label col_ptr   = $74
-.label code_val  = $76
-.label color_val = $77
+// None needed for this simplified demo.
 
 .pc = $3000 "Custom Charset"
 CHAR_A_ACUTE:
